@@ -36,6 +36,7 @@ having to wait to reload the database each time. However, it doesn't hot-reload.
 If needed, the script can load data from data files other than the default with
 `--neofile` or `--cadfile`.
 """
+
 import argparse
 import cmd
 import datetime
@@ -49,14 +50,12 @@ from database import NEODatabase
 from filters import create_filters, limit
 from write import write_to_csv, write_to_json
 
-
 # Paths to the root of the project and the `data` subfolder.
 PROJECT_ROOT = pathlib.Path(__file__).parent.resolve()
 DATA_ROOT = PROJECT_ROOT / 'data'
 
 # The current time, for use with the kill-on-change feature of the interactive shell.
 _START = time.time()
-
 
 def date_fromisoformat(date_string):
     """Return a `datetime.date` corresponding to a string in YYYY-MM-DD format.
@@ -65,18 +64,21 @@ def date_fromisoformat(date_string):
     supporting Python 3.6+.
 
     :param date_string: A date in the format YYYY-MM-DD.
-    :return: A `datetime.date` correspondingo the given date string.
+    :type date_string: str
+    :return: A `datetime.date` corresponding to the given date string.
+    :rtype: datetime.date
+    :raises argparse.ArgumentTypeError: If `date_string` is not a valid date.
     """
     try:
         return datetime.datetime.strptime(date_string, '%Y-%m-%d').date()
     except ValueError:
         raise argparse.ArgumentTypeError(f"'{date_string}' is not a valid date. Use YYYY-MM-DD.")
 
-
 def make_parser():
     """Create an ArgumentParser for this script.
 
     :return: A tuple of the top-level, inspect, and query parsers.
+    :rtype: tuple[argparse.ArgumentParser, argparse.ArgumentParser, argparse.ArgumentParser]
     """
     parser = argparse.ArgumentParser(
         description="Explore past and future close approaches of near-Earth objects."
@@ -153,28 +155,31 @@ def make_parser():
 
     repl = subparsers.add_parser('interactive',
                                  description="Start an interactive command session "
-                                             "to repeatedly run `interact` and `query` commands.")
+                                             "to repeatedly run `inspect` and `query` commands.")
     repl.add_argument('-a', '--aggressive', action='store_true',
-                      help="If specified, kill the session whenever a project file is modified.")
+                      help="If specified, kill the session whenever a project file is changed.")
     return parser, inspect, query
-
 
 def inspect(database, pdes=None, name=None, verbose=False):
     """Perform the `inspect` subcommand.
 
     This function fetches an NEO by designation or by name. If a matching NEO is
-    found, information about the NEO is printed (additionally, information for
-    all of the NEO's known close approaches is printed if `verbose=True`).
-    Otherwise, a message is printed noting that there are no matching NEOs.
+    found, information about the NEO is printed. Additionally, if `verbose=True`,
+    all of the NEO's known close approaches are printed.
 
     At least one of `pdes` and `name` must be given. If both are given, prefer
     to look up the NEO by the primary designation.
 
     :param database: The `NEODatabase` containing data on NEOs and their close approaches.
+    :type database: NEODatabase
     :param pdes: The primary designation of an NEO for which to search.
+    :type pdes: str, optional
     :param name: The name of an NEO for which to search.
+    :type name: str, optional
     :param verbose: Whether to additionally print all of a matching NEO's close approaches.
+    :type verbose: bool
     :return: The matching `NearEarthObject`, or None if not found.
+    :rtype: NearEarthObject or None
     """
     # Fetch the NEO of interest.
     if pdes:
@@ -194,7 +199,6 @@ def inspect(database, pdes=None, name=None, verbose=False):
             print(f"- {approach}")
     return neo
 
-
 def query(database, args):
     """Perform the `query` subcommand.
 
@@ -207,7 +211,9 @@ def query(database, args):
     then write the results to the output file in that format.
 
     :param database: The `NEODatabase` containing data on NEOs and their close approaches.
+    :type database: NEODatabase
     :param args: All arguments from the command line, as parsed by the top-level parser.
+    :type args: argparse.Namespace
     """
     # Construct a collection of filters from arguments supplied at the command line.
     filters = create_filters(
@@ -233,7 +239,6 @@ def query(database, args):
         else:
             print("Please use an output file that ends with `.csv` or `.json`.", file=sys.stderr)
 
-
 class NEOShell(cmd.Cmd):
     """Perform the `interactive` subcommand.
 
@@ -256,10 +261,15 @@ class NEOShell(cmd.Cmd):
         Creating this object doesn't start the session - for that, use `.cmdloop()`.
 
         :param database: The `NEODatabase` containing data on NEOs and their close approaches.
+        :type database: NEODatabase
         :param inspect_parser: The subparser for the `inspect` subcommand.
+        :type inspect_parser: argparse.ArgumentParser
         :param query_parser: The subparser for the `query` subcommand.
+        :type query_parser: argparse.ArgumentParser
         :param aggressive: Whether to kill the session whenever a project file is changed.
+        :type aggressive: bool
         :param kwargs: A dictionary of excess keyword arguments passed to the superclass.
+        :type kwargs: dict
         """
         super().__init__(**kwargs)
         self.db = database
@@ -275,8 +285,11 @@ class NEOShell(cmd.Cmd):
         print the error to stderr and return None.
 
         :param arg: The additional text supplied after the command.
+        :type arg: str
         :param parser: An `argparse.ArgumentParser` to parse the arguments.
+        :type parser: argparse.ArgumentParser
         :return: A `Namespace` of the arguments (produced by `parse_args`) or None.
+        :rtype: argparse.Namespace or None
         """
         # Lexically parse the additional text with POSIX shell-like syntax.
         try:
@@ -349,7 +362,7 @@ class NEOShell(cmd.Cmd):
         if not args:
             return
 
-        # Run the `inspect` subcommand.
+        # Run the `query` subcommand.
         query(self.db, args)
 
     def do_EOF(self, _arg):
@@ -361,7 +374,18 @@ class NEOShell(cmd.Cmd):
     do_quit = do_EOF
 
     def precmd(self, line):
-        """Watch for changes to the files in this project."""
+        """Watch for changes to the files in this project.
+
+        This method checks if any project files have been modified since the
+        interactive session began. If changes are detected and `aggressive` mode
+        is enabled, the session will be terminated.
+
+        :param line: The command line input.
+        :type line: str
+        :return: The command line input if no file changes are detected or if not in aggressive mode;
+                 otherwise, the string 'exit' to terminate the session.
+        :rtype: str
+        """
         changed = [f for f in PROJECT_ROOT.glob('*.py') if f.stat().st_mtime > _START]
         if changed:
             print("The following file(s) have been modified since this interactive session began: "
@@ -375,9 +399,13 @@ class NEOShell(cmd.Cmd):
                 return 'exit'
         return line
 
-
 def main():
-    """Run the main script."""
+    """Run the main script.
+
+    This function sets up the argument parsers, loads the data files into
+    the `NEODatabase`, and executes the appropriate subcommand based on the
+    user's input.
+    """
     parser, inspect_parser, query_parser = make_parser()
     args = parser.parse_args()
 
@@ -391,7 +419,6 @@ def main():
         query(database, args)
     elif args.cmd == 'interactive':
         NEOShell(database, inspect_parser, query_parser, aggressive=args.aggressive).cmdloop()
-
 
 if __name__ == '__main__':
     main()
